@@ -1,5 +1,4 @@
 const Redis = require('ioredis');
-const EventEmitter = require('events');
 
 class MessageQueueHandler {
   constructor(config = {}) {
@@ -10,8 +9,13 @@ class MessageQueueHandler {
         ...config
       });
       
+      this.subscriber = new Redis({
+        host: config.host || 'localhost',
+        port: config.port || 6379,
+        ...config
+      });
+      
       this.MESSAGE_EXPIRY = 24 * 60 * 60;
-      this.eventEmitter = new EventEmitter();
       MessageQueueHandler.instance = this;
     }
 
@@ -26,8 +30,20 @@ class MessageQueueHandler {
         if (entry && entry.serverMsgId && entry.deliveryReceipt) {
           resolve(entry);
         } else {
-          // If not complete, wait for completion event
-          this.eventEmitter.once(`complete:${vendorMsgId}`, resolve);
+          // If not complete, subscribe to completion channel
+          const channel = `complete:${vendorMsgId}`;
+          
+          const messageHandler = (channel, message) => {
+            const entry = JSON.parse(message);
+            this.subscriber.unsubscribe(channel);
+            resolve(entry);
+          };
+
+          this.subscriber.subscribe(channel, (err) => {
+            if (err) console.error('Subscribe error:', err);
+          });
+          
+          this.subscriber.on('message', messageHandler);
         }
       });
     });
@@ -54,7 +70,11 @@ class MessageQueueHandler {
     const entry = result[result.length - 1][1]; // Get the final state after update
 
     if (entry.serverMsgId && entry.deliveryReceipt) {
-      this.eventEmitter.emit(`complete:${vendorMsgId}`, entry);
+      // Publish the complete entry to Redis channel
+      await this.redis.publish(
+        `complete:${vendorMsgId}`, 
+        JSON.stringify(entry)
+      );
     }
 
     return entry;

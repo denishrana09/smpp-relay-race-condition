@@ -5,7 +5,7 @@ const messageQueue = require('./redis-handler');
 let clientSession = null;
 
 // Create connection to vendor
-const vendorSession = new smpp.Session({ host: '127.0.0.1', port: 2776 });
+const vendorSession = new smpp.Session({ host: '127.0.0.1', port: 2775 });
 
 vendorSession.on('error', (error) => {
   console.log('Server->Vendor connection error:', error);
@@ -17,8 +17,8 @@ vendorSession.on('connect', () => {
   // Bind as transceiver to vendor
   vendorSession.bind_transceiver(
     {
-      system_id: 'SERVER',
-      password: 'password',
+      system_id: 'vendor1',
+      password: 'password1',
     },
     (pdu) => {
       if (pdu.command_status === 0) {
@@ -30,14 +30,15 @@ vendorSession.on('connect', () => {
 
 // Handle deliver_sm from vendor
 vendorSession.on('deliver_sm', async (pdu) => {
-  console.log('Server: Received deliver_sm from vendor');
   const vendorMsgId = pdu.receipted_message_id;
+  console.log('Server: Received deliver_sm from vendor', vendorMsgId);
 
   // Store delivery receipt
   await messageQueue.createOrUpdateEntry(vendorMsgId, {
     deliveryReceipt: JSON.stringify(pdu),
   });
 
+  console.log('Server: Waiting for completion');
   // Wait for both pieces of information to be available
   const completeEntry = await messageQueue.waitForCompletion(vendorMsgId);
 
@@ -85,25 +86,19 @@ const server = smpp.createServer((session) => {
         sequence_number: undefined,
       },
       async (vendorPdu) => {
+        await sleep(4000); // for testing purposes
         console.log('Server: Received vendor response');
         const vendorMsgId = vendorPdu.message_id;
-
-        await sleep(2000);
-
-        // Store server message ID
+        // Only store the server message ID, don't wait for completion
         await messageQueue.createOrUpdateEntry(vendorMsgId, {
           serverMsgId: serverMsgId,
         });
-
-        // Wait for both pieces of information to be available
-        const completeEntry = await messageQueue.waitForCompletion(vendorMsgId);
-
-        // Process the delivery receipt
-        const completePdu = JSON.parse(completeEntry.deliveryReceipt);
-        processDeliveryReceipt(completePdu, completeEntry.serverMsgId, 'ONE');
-        await messageQueue.deleteQueueEntry(vendorMsgId);
       }
     );
+  });
+
+  session.on('close', () => {
+    console.log('Server: Client session closed');
   });
 });
 
@@ -126,10 +121,12 @@ function processDeliveryReceipt(pdu, serverMsgId, type) {
   }
 }
 
-server.listen(2775, () => console.log('Server: Listening on port 2775'));
+server.listen(2770, () => console.log('Server: Listening on port 2770'));
 
 // Cleanup on server shutdown
 process.on('SIGTERM', async () => {
   await messageQueue.redis.quit();
+  await messageQueue.subscriber.quit();
+  console.log('Server shutting down');
   process.exit(0);
 });
