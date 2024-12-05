@@ -123,10 +123,60 @@ function processDeliveryReceipt(pdu, serverMsgId, type) {
 
 server.listen(2770, () => console.log('Server: Listening on port 2770'));
 
-// Cleanup on server shutdown
-process.on('SIGTERM', async () => {
+// Cleanup on server shutdown or terminal session close
+const cleanup = async () => {
+  console.log('Starting cleanup...');
+
+  // Close SMPP client session if exists
+  if (clientSession) {
+    clientSession.close();
+  }
+
+  // Close SMPP vendor session
+  if (vendorSession) {
+    vendorSession.close();
+  }
+
+  // Close SMPP server
+  server.close();
+
+  // Close Redis connections
   await messageQueue.redis.quit();
   await messageQueue.subscriber.quit();
-  console.log('Server shutting down');
+
+  console.log('Server shutting down...');
   process.exit(0);
+};
+
+// Add more signal handlers and debug logs
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM');
+  cleanup();
+});
+
+process.on('SIGHUP', () => {
+  console.log('Received SIGHUP');
+  cleanup();
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT');
+  cleanup();
+});
+
+// Catch uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.log('Uncaught Exception:', err);
+  cleanup();
+});
+
+// Catch unhandled rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.log('Unhandled Rejection at:', promise, 'reason:', reason);
+  cleanup();
+});
+
+// Add exit handler
+process.on('exit', (code) => {
+  console.log(`Process exit with code: ${code}`);
 });
